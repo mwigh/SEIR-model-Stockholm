@@ -176,6 +176,20 @@ epsilon_low = scipy.stats.norm.ppf(
 theta_low = np.exp(scipy.stats.norm.ppf(
     loc=best_res.x[2], scale=sdParams[2], q=CI_level_05))
 
+# Bootstraping
+# Use cov matrix instead of sdparam d/t multivariate. Prob wrong in R code
+paras_bootstrap = np.random.multivariate_normal(mean=best_res.x, cov=NeginvH2, size=100)
+paras_bootstrap[:,0] = expit(paras_bootstrap[:,0])
+paras_bootstrap[:,2] = np.exp(paras_bootstrap[:,2])
+
+def run_odeint(paras, args):
+    delta, epsilon, theta = paras
+    t_b, gamma, p0, q0 = args
+    return odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
+
+pool = mp.Pool(mp.cpu_count())
+res = pool.starmap(run_odeint, [(paras,[t_b, gamma, p0, q0]) for paras in paras_bootstrap])
+
 
 return_vals = odeint(SEIR_derivative, y0, t, args=(
     t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0))
