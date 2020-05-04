@@ -6,6 +6,7 @@ from scipy.optimize import minimize
 import numpy as np
 import matplotlib.pyplot as plt
 import multiprocessing as mp
+from scipy.special import logit, expit
 
 CSV_CASE_PATH = os.path.join('Data', 'Data_2020-04-10Ny.txt')
 DATE_COLUMN = 'Datum'
@@ -19,7 +20,7 @@ START_DATE = datetime.datetime(2020, 2, 17)
 END_DATE_OPTIMIZE = datetime.datetime(2020, 4, 10)
 END_DATE_SIMULATION = datetime.datetime(2020, 8, 10)
 MIDDLE_THETA = datetime.datetime(2020, 3, 16)
-
+NB_OPTIMIZATIONS = 4 #Number of optimization runs
 p0 = 0.987 #Calibrated somehow to fit 2.5% in end march 
 q0=0.11
 delta=0.16
@@ -61,17 +62,17 @@ def SEIR_derivative(y, t, t_b, delta, epsilon, theta, gamma, p0, q0):
 
 
 def opt_guesses():
-    u_d = np.random.uniform(0.05, 0.6) # guess for delta 
+    u_d = logit(np.random.uniform(0.05, 0.6)) # guess for delta 
     u_e = np.random.uniform(-0.6, 0)    # guess for epsilon
-    u_t =  np.random.uniform(0, 15)    # guess for theta
+    u_t =  np.log(np.random.uniform(0, 15))    # guess for theta
     return u_d, u_e, u_t
 
 def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
     # Code for minimizing, similar as in R code
     
-    delta = params[0]
+    delta = expit(params[0])
     epsilon = params[1]
-    theta = params[2]
+    theta = np.exp(params[2])
 
     dummy_infectivity = b_t_func(np.arange(200), t_b, delta, epsilon, theta, gamma, p0, q0)
     if min(dummy_infectivity)<0:
@@ -86,7 +87,6 @@ def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
 def run_optimization(x0, args):
     t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, tmpdict = args
     print(x0)
-    print(tmpdict['options'])
     return minimize(RSS, x0, method=tmpdict['method'],options=tmpdict['options'],
             args=(t_optimize, t_b, y0, p0, rho, incidence, gamma, q0))
 
@@ -111,7 +111,7 @@ daterange_opt = [START_DATE + datetime.timedelta(days=x) for x in range(0, int((
 
 pool = mp.Pool(mp.cpu_count())
 args = [t_optimize, t_b, y0, p0, rho, incidence[0:t_optimize.shape[0]],  gamma, q0, {'method':'Nelder-Mead','options': {'maxiter':1000}}]
-results = pool.starmap(run_optimization, [(opt_guesses(), args) for i in range(4)])
+results = pool.starmap(run_optimization, [(opt_guesses(), args) for i in range(NB_OPTIMIZATIONS)])
 for i, res in enumerate(results):
     delta, epsilon, theta = res.x
     print(delta, epsilon, theta)
@@ -120,7 +120,7 @@ for i, res in enumerate(results):
         best_res = res
 
 delta, epsilon, theta = best_res.x
-return_vals = odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
+return_vals = odeint(SEIR_derivative, y0, t, args=(t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0))
 R, S, E, I_o, I_r = return_vals.T
 plt.plot(daterange, ((1-p0) * E * rho))
 plt.plot(df[INCIDENSE_COLUMN][[da.date() for da in daterange_opt]], 'o', mfc='none')
