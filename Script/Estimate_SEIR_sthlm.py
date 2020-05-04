@@ -2,6 +2,7 @@ import os
 import datetime
 import pandas as pd
 from scipy.integrate import odeint
+from scipy.optimize import minimize
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -30,7 +31,7 @@ t_b=(MIDDLE_THETA-START_DATE).days
 def basic_reproduction(p0, b_t, gamma, q0):
     return (1 - p0) * b_t / gamma + p0 * q0 * b_t / gamma
 
-def b_t_func(t, t_b, delta, epsilon, theta):
+def b_t_func(t, t_b, delta, epsilon, theta, gamma, p0, q0):
     exp_var = -epsilon * (t - t_b)
     return theta * (delta +(1 - delta)/(1 + np.exp(exp_var)))
 
@@ -41,7 +42,7 @@ def SEIR_derivative(y, t, t_b, delta, epsilon, theta, gamma, p0, q0):
     global t_ode, R0, R_e
 
     R, S, E, I_o, I_r = y
-    b_t = b_t_func(t, t_b, delta, epsilon, theta)
+    b_t = b_t_func(t, t_b, delta, epsilon, theta, gamma, p0, q0)
     nir = S *b_t/N #new_infected_ratio
     rhoE = rho * E
 
@@ -57,6 +58,31 @@ def SEIR_derivative(y, t, t_b, delta, epsilon, theta, gamma, p0, q0):
 
     return dRdt, dSdt, dEdt, dI_odt, dI_rdt
 
+
+def opt_guesses():
+    u_d = np.random.uniform(0.05, 0.6) # guess for delta 
+    u_e = np.random.uniform(-0.6, 0)    # guess for epsilon
+    u_t =  np.random.uniform(0, 15)    # guess for theta
+    return u_d, u_e, u_t
+
+def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
+    # Code for minimizing, similar as in R code
+    
+    delta = params[0]
+    epsilon = params[1]
+    theta = params[2]
+
+    dummy_infectivity = b_t_func(np.arange(200), t_b, delta, epsilon, theta, gamma, p0, q0)
+    if min(dummy_infectivity)<0:
+        return 10**12
+    return_vals = odeint(SEIR_derivative, y0, t=t_optimize, args=(t_b,delta, epsilon, theta, gamma, p0, q0))
+    R, S, E, I_o, I_r = return_vals.T
+    fitted_incidence  = (1-p0) * E * rho
+    #print(((incidence - fitted_incidence)**2).sum())
+    
+    return ((incidence - fitted_incidence)**2).sum()
+
+# Basic tests
 df = pd.read_csv(CSV_CASE_PATH, sep=' ', parse_dates=[DATE_COLUMN]).set_index(DATE_COLUMN)
 y0 = 0, N-i0, 0, 0, i0
 daterange = [START_DATE + datetime.timedelta(days=x) for x in range(0, int((END_DATE_SIMULATION-START_DATE).days))]
@@ -69,5 +95,25 @@ return_vals = odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, g
 R, S, E, I_o, I_r = return_vals.T
 daterange_ode = [START_DATE + datetime.timedelta(days=x) for x in t_ode]
 
-plt.plot(daterange_ode, R0)
+# Optimize
+t_optimize=np.arange((END_DATE_OPTIMIZE-START_DATE).days+1)
+
+incidence=df.to_numpy().flatten()
+daterange_opt = [START_DATE + datetime.timedelta(days=x) for x in range(0, int((END_DATE_OPTIMIZE-START_DATE).days+1))]
+
+for i in range(2):
+    x0 = opt_guesses()
+    res = minimize(RSS, x0, method='Nelder-Mead',options={'maxiter':1000},
+            args=(t_optimize, t_b, y0, p0, rho, incidence[0:t_optimize.shape[0]],  gamma, q0))
+    delta, epsilon, theta = res.x
+    print(res.x)
+    print(res.fun)
+    if i == 0 or res.fun<best_res.fun:
+        best_res = res
+delta, epsilon, theta = best_res.x
+return_vals = odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
+R, S, E, I_o, I_r = return_vals.T
+plt.plot(daterange, ((1-p0) * E * rho))
+plt.plot(df[INCIDENSE_COLUMN][[da.date() for da in daterange_opt]], 'o', mfc='none')
 plt.show()
+
