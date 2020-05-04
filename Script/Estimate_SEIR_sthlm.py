@@ -5,6 +5,7 @@ from scipy.integrate import odeint
 from scipy.optimize import minimize
 import numpy as np
 import matplotlib.pyplot as plt
+import multiprocessing as mp
 
 CSV_CASE_PATH = os.path.join('Data', 'Data_2020-04-10Ny.txt')
 DATE_COLUMN = 'Datum'
@@ -82,6 +83,13 @@ def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
     
     return ((incidence - fitted_incidence)**2).sum()
 
+def run_optimization(x0, args):
+    t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, tmpdict = args
+    print(x0)
+    print(tmpdict['options'])
+    return minimize(RSS, x0, method=tmpdict['method'],options=tmpdict['options'],
+            args=(t_optimize, t_b, y0, p0, rho, incidence, gamma, q0))
+
 # Basic tests
 df = pd.read_csv(CSV_CASE_PATH, sep=' ', parse_dates=[DATE_COLUMN]).set_index(DATE_COLUMN)
 y0 = 0, N-i0, 0, 0, i0
@@ -101,15 +109,16 @@ t_optimize=np.arange((END_DATE_OPTIMIZE-START_DATE).days+1)
 incidence=df.to_numpy().flatten()
 daterange_opt = [START_DATE + datetime.timedelta(days=x) for x in range(0, int((END_DATE_OPTIMIZE-START_DATE).days+1))]
 
-for i in range(2):
-    x0 = opt_guesses()
-    res = minimize(RSS, x0, method='Nelder-Mead',options={'maxiter':1000},
-            args=(t_optimize, t_b, y0, p0, rho, incidence[0:t_optimize.shape[0]],  gamma, q0))
+pool = mp.Pool(mp.cpu_count())
+args = [t_optimize, t_b, y0, p0, rho, incidence[0:t_optimize.shape[0]],  gamma, q0, {'method':'Nelder-Mead','options': {'maxiter':1000}}]
+results = pool.starmap(run_optimization, [(opt_guesses(), args) for i in range(4)])
+for i, res in enumerate(results):
     delta, epsilon, theta = res.x
-    print(res.x)
+    print(delta, epsilon, theta)
     print(res.fun)
     if i == 0 or res.fun<best_res.fun:
         best_res = res
+
 delta, epsilon, theta = best_res.x
 return_vals = odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
 R, S, E, I_o, I_r = return_vals.T
