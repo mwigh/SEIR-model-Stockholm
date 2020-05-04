@@ -5,10 +5,12 @@ from scipy.integrate import odeint
 from scipy.optimize import minimize
 import scipy.stats
 import numpy as np
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 from scipy.special import logit, expit
 import numdifftools as nd
+
 
 CSV_CASE_PATH = os.path.join('Data', 'Data_2020-04-10Ny.txt')
 DATE_COLUMN = 'Datum'
@@ -25,6 +27,7 @@ END_DATE_OPTIMIZE = datetime.datetime(2020, 4, 10)
 END_DATE_SIMULATION = datetime.datetime(2020, 8, 10)
 MIDDLE_THETA = datetime.datetime(2020, 3, 16)
 NB_OPTIMIZATIONS = 4  # Number of optimization runs
+NB_BOOTSRAPING = 1000
 p0 = 0.987  # Calibrated somehow to fit 2.5% in end march
 q0 = 0.11
 delta = 0.16
@@ -92,14 +95,13 @@ def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
         t_b, delta, epsilon, theta, gamma, p0, q0))
     R, S, E, I_o, I_r = return_vals.T
     fitted_incidence = (1 - p0) * E * rho
-    #print(((incidence - fitted_incidence)**2).sum())
+    # print(((incidence - fitted_incidence)**2).sum())
 
     return ((incidence - fitted_incidence)**2).sum()
 
 
 def run_optimization(x0, args):
     t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, tmpdict = args
-    print(x0)
     return minimize(RSS, x0, method=tmpdict['method'], options=tmpdict['options'],
                     args=(t_optimize, t_b, y0, p0, rho, incidence, gamma, q0))
 
@@ -109,6 +111,22 @@ def numerical_Hessian(params, args):
     # is not returned from Nelder-Mead in python
     t_optimize, t_b, y0, p0, rho, incidence,  gamma, q0 = args
     return RSS(params, t_optimize, t_b, y0, p0, rho, incidence,  gamma, q0)
+
+
+def run_odeint(paras, args):
+    delta, epsilon, theta = paras
+    t_b, gamma, p0, q0 = args
+    return odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
+
+def CRI(x, level=0.95, up=False):
+    # Similar to in report. Credibility interval
+    n = len(x)
+    L = (1 - level) / 2
+    U = 1 - (1 - level) / 2
+    x = np.sort(x)
+    if up:
+        return x[np.int(n * U)] 
+    return x[np.int(n * L)]
 
 # Basic tests
 df = pd.read_csv(CSV_CASE_PATH, sep=' ', parse_dates=[
@@ -156,11 +174,13 @@ H = nd.Hessian(numerical_Hessian)([delta, epsilon, theta], args)
 
 # This covariance matrix is transformed
 # Calculated different NeginvH2 compared to report. Check this more some time.
-# I think this is correct but they might be using some other opt algorithm that returns something else
+# I think this is correct but they might be using some other opt algorithm
+# that returns something else
 NeginvH2 = np.linalg.inv(H) * sigest**2
 sdParams = np.sqrt(np.diag(NeginvH2))
 
-# Confidence intervals #Those this make sense with multivariate? Check this some time.
+# Confidence intervals #Those this make sense with multivariate? Check
+# this some time.
 CI_level_05 = 0.025
 delta_high = expit(scipy.stats.norm.ppf(
     loc=best_res.x[0], scale=sdParams[0], q=1 - CI_level_05))
@@ -178,23 +198,39 @@ theta_low = np.exp(scipy.stats.norm.ppf(
 
 # Bootstraping
 # Use cov matrix instead of sdparam d/t multivariate. Prob wrong in R code
-paras_bootstrap = np.random.multivariate_normal(mean=best_res.x, cov=NeginvH2, size=100)
-paras_bootstrap[:,0] = expit(paras_bootstrap[:,0])
-paras_bootstrap[:,2] = np.exp(paras_bootstrap[:,2])
+paras_bootstrap = np.random.multivariate_normal(
+    mean=best_res.x, cov=NeginvH2, size=NB_BOOTSRAPING)
+paras_bootstrap[:, 0] = expit(paras_bootstrap[:, 0])
+paras_bootstrap[:, 2] = np.exp(paras_bootstrap[:, 2])
 
-def run_odeint(paras, args):
-    delta, epsilon, theta = paras
-    t_b, gamma, p0, q0 = args
-    return odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
 
 pool = mp.Pool(mp.cpu_count())
-res = pool.starmap(run_odeint, [(paras,[t_b, gamma, p0, q0]) for paras in paras_bootstrap])
+res = pool.starmap(
+    run_odeint, [(paras, [t_b, gamma, p0, q0]) for paras in paras_bootstrap])
 
+# Calculate boostraping CI
 
 return_vals = odeint(SEIR_derivative, y0, t, args=(
-    t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0))
+    t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0)) # Optimal
 R, S, E, I_o, I_r = return_vals.T
-plt.plot(daterange, ((1 - p0) * E * rho))
-plt.plot(df[INCIDENSE_COLUMN][[da.date()
+
+I_r_daily_new = (1- p0) * E * rho # New reported incidences estimates
+I_r_bootsraping = [(1- p0) * res[ind][:,2:3] * rho for ind in range(len(res))]
+I_r_bootsraping = np.concatenate(I_r_bootsraping ,axis=1)
+I_r_Up = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, up=True)
+I_r_Down = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, up=False)
+
+# Plotting
+fig, axs = plt.subplots(1,1)
+axs.plot(daterange, I_r_Up, '.')
+axs.plot(daterange, I_r_Down, '.')
+axs.plot(daterange, I_r_daily_new)
+axs.plot(df[INCIDENSE_COLUMN][[da.date()
                                for da in daterange_opt]], 'o', mfc='none')
+
+axs.grid()
+axs.tick_params(labelrotation=20)
+mnthday = mdates.DateFormatter('%m-%d')
+axs.xaxis.set_major_formatter(mnthday)
+
 plt.show()
