@@ -26,13 +26,14 @@ START_DATE = datetime.datetime(2020, 2, 17)
 END_DATE_OPTIMIZE = datetime.datetime(2020, 4, 10)
 END_DATE_SIMULATION = datetime.datetime(2020, 8, 10)
 MIDDLE_THETA = datetime.datetime(2020, 3, 16)
-NB_OPTIMIZATIONS = 4  # Number of optimization runs
+NB_OPTIMIZATIONS = 20  # Number of optimization runs
 NB_BOOTSRAPING = 1000
+
 p0 = 0.987  # Calibrated somehow to fit 2.5% in end march
-q0 = 0.11
-delta = 0.16
-epsilon = -0.19
-theta = 10.9
+q0 = 0.55 # Rate of how infective a non reported case is vs reported
+delta = 0.16 # Init for test
+epsilon = -0.19 # Init for test
+theta = 10.9 # Init for test
 rho = 1 / MEAN_LENGTH_INCUBATION
 gamma = 1 / MEAN_LENGTH_SICK
 t_b = (MIDDLE_THETA - START_DATE).days
@@ -74,6 +75,7 @@ def SEIR_derivative(y, t, t_b, delta, epsilon, theta, gamma, p0, q0):
 
 
 def opt_guesses():
+    # Similar as in R
     u_d = logit(np.random.uniform(0.05, 0.6))  # guess for delta
     u_e = np.random.uniform(-0.6, 0)    # guess for epsilon
     u_t = np.log(np.random.uniform(0, 15))    # guess for theta
@@ -142,7 +144,7 @@ t_ode, R0, R_e = ([] for i in range(3))
 return_vals = odeint(SEIR_derivative, y0, t, args=(
     t_b, delta, epsilon, theta, gamma, p0, q0))
 R, S, E, I_o, I_r = return_vals.T
-daterange_ode = [START_DATE + datetime.timedelta(days=x) for x in t_ode]
+
 
 # Optimize in parallel
 t_optimize = np.arange((END_DATE_OPTIMIZE - START_DATE).days + 1)
@@ -159,8 +161,8 @@ results = pool.starmap(run_optimization, [(
     opt_guesses(), args + opt_args) for i in range(NB_OPTIMIZATIONS)])
 for i, res in enumerate(results):
     delta, epsilon, theta = res.x
-    print(delta, epsilon, theta)
-    print(res.fun)
+    #print(delta, epsilon, theta)
+    #print(res.fun)
     if i == 0 or res.fun < best_res.fun:
         best_res = res
 
@@ -209,28 +211,59 @@ res = pool.starmap(
     run_odeint, [(paras, [t_b, gamma, p0, q0]) for paras in paras_bootstrap])
 
 # Calculate boostraping CI
-
+t_ode, R0, R_e = ([] for i in range(3))
 return_vals = odeint(SEIR_derivative, y0, t, args=(
     t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0)) # Optimal
 R, S, E, I_o, I_r = return_vals.T
+R0_plot = R0
+Re_plot = R_e
+daterange_ode = [START_DATE + datetime.timedelta(days=x) for x in t_ode]
 
 I_r_daily_new = (1- p0) * E * rho # New reported incidences estimates
+
+
 I_r_bootsraping = [(1- p0) * res[ind][:,2:3] * rho for ind in range(len(res))]
 I_r_bootsraping = np.concatenate(I_r_bootsraping ,axis=1)
+S_bootstraping = [res[ind][:,1:2] for ind in range(len(res))]
+S_bootstraping = np.concatenate(S_bootstraping,axis=1)
+
 I_r_Up = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, up=True)
 I_r_Down = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, up=False)
+S_Up = np.apply_along_axis(CRI, axis=1, arr=S_bootstraping, level = 0.95, up=True)
+S_Down = np.apply_along_axis(CRI, axis=1, arr=S_bootstraping, level = 0.95, up=False)
 
 # Plotting
-fig, axs = plt.subplots(1,1)
-axs.plot(daterange, I_r_Up, '.')
-axs.plot(daterange, I_r_Down, '.')
-axs.plot(daterange, I_r_daily_new)
-axs.plot(df[INCIDENSE_COLUMN][[da.date()
-                               for da in daterange_opt]], 'o', mfc='none')
+fig, axs = plt.subplots(2,2)
 
-axs.grid()
-axs.tick_params(labelrotation=20)
-mnthday = mdates.DateFormatter('%m-%d')
-axs.xaxis.set_major_formatter(mnthday)
+axs[0, 0].plot(daterange, I_r_daily_new)
+axs[0, 0].plot(df[INCIDENSE_COLUMN][[da.date()
+                               for da in daterange_opt]], 'o', mfc='none')
+axs[0, 0].plot(daterange, I_r_Up, ',')
+axs[0, 0].plot(daterange, I_r_Down, ',')
+
+axs[0, 0].set_title('# new cases every day with CI')
+axs[0, 0].legend(['Estimated new cases', 'Observed new cases'])
+
+
+axs[1, 0].plot(daterange, (N-np.array(S))/N*100)
+axs[1, 0].plot(daterange, (N-np.array(S_Up))/N*100, ',')
+axs[1, 0].plot(daterange, (N-np.array(S_Down))/N*100, ',')
+axs[1, 0].set_title('Percent Non-Susceptible this date with CI')
+axs[1, 0].set_ylabel('Percent')
+
+axs[0, 1].plot(daterange, (np.array(I_o)+np.array(I_r))/N*100)
+axs[0, 1].set_title('Percent infected this date')
+axs[0, 1].set_ylabel('Percent')
+
+axs[1,1].plot(daterange_ode, R0_plot)
+axs[1,1].plot(daterange_ode, Re_plot, 'o', mfc='none')
+axs[1, 1].set_title('R0 and R_e')
+axs[1, 1].legend(['R0', 'R_e'])
+
+for ax in axs.reshape(-1):
+    ax.grid()
+    ax.tick_params(labelrotation=20)
+    mnthday = mdates.DateFormatter('%m-%d')
+    ax.xaxis.set_major_formatter(mnthday)
 
 plt.show()
