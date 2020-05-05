@@ -13,20 +13,23 @@ import numdifftools as nd
 
 
 CSV_CASE_PATH = os.path.join('Data', 'Data_2020-04-10Ny.txt')
+CSV_IN_IVA_PATH = os.path.join('Data', 'Data_2020-05-04_iva.txt')
 DATE_COLUMN = 'Datum'
 INCIDENSE_COLUMN = 'Incidens'
+IVA_COLUMN = 'IN_IVA'
 MEAN_LENGTH_SICK = 5
 MEAN_LENGTH_INCUBATION = 5.1
 
-MEAN_LENGTH_IVA = 10 #Guess from their analysis #https://www.folkhalsomyndigheten.se/contentassets/4b4dd8c7e15d48d2be744248794d1438/skattning-av-behov-av-slutenvardsplatser-covid-lombardiet.pdf
-IVA_DELAY = 11 # From iva register
-RATE_IN_IVA = 0.12 #Test to fit peak at approx 224
+MEAN_LENGTH_IVA = 10  # Guess from their analysis #https://www.folkhalsomyndigheten.se/contentassets/4b4dd8c7e15d48d2be744248794d1438/skattning-av-behov-av-slutenvardsplatser-covid-lombardiet.pdf
+IVA_DELAY = 11  # From iva register
+RATE_IN_IVA = 0.121  # Test to fit curve
 
 # report page 9#int(648557/0.27+616655/0.26)/2 #Mean from Tabell 1 page 13
 # #approx 2.386M
 N = 2374550
 i0 = 1
 START_DATE = datetime.datetime(2020, 2, 17)
+START_DATE_IVA = datetime.datetime(2020, 3, 30)
 END_DATE_OPTIMIZE = datetime.datetime(2020, 4, 10)
 END_DATE_SIMULATION = datetime.datetime(2020, 8, 10)
 MIDDLE_THETA = datetime.datetime(2020, 3, 16)
@@ -34,10 +37,10 @@ NB_OPTIMIZATIONS = 4  # Number of optimization runs
 NB_BOOTSRAPING = 1000
 
 p0 = 0.987  # Calibrated somehow to fit 2.5% in end march
-q0 = 0.11 # Rate of how infective a non reported case is vs reported
-delta = 0.16 # Init for test
-epsilon = -0.19 # Init for test
-theta = 10.9 # Init for test
+q0 = 0.11  # Rate of how infective a non reported case is vs reported
+delta = 0.16  # Init for test
+epsilon = -0.19  # Init for test
+theta = 10.9  # Init for test
 rho = 1 / MEAN_LENGTH_INCUBATION
 gamma = 1 / MEAN_LENGTH_SICK
 t_b = (MIDDLE_THETA - START_DATE).days
@@ -124,6 +127,7 @@ def run_odeint(paras, args):
     t_b, gamma, p0, q0 = args
     return odeint(SEIR_derivative, y0, t, args=(t_b, delta, epsilon, theta, gamma, p0, q0))
 
+
 def CRI(x, level=0.95, up=False):
     # Similar to in report. Credibility interval
     n = len(x)
@@ -131,19 +135,23 @@ def CRI(x, level=0.95, up=False):
     U = 1 - (1 - level) / 2
     x = np.sort(x)
     if up:
-        return x[np.int(n * U)] 
+        return x[np.int(n * U)]
     return x[np.int(n * L)]
 
+
 def calculate_in_iva(I_r, rate_in_iva=RATE_IN_IVA, iva_delay=IVA_DELAY, mean_length_iva=MEAN_LENGTH_IVA):
-    IVA_arr = np.zeros(IVA_DELAY+MEAN_LENGTH_IVA)
+    IVA_arr = np.zeros(IVA_DELAY + MEAN_LENGTH_IVA)
     IVA_arr[IVA_DELAY:] = 1
-    return np.convolve(np.array(I_r), IVA_arr)[0:len(I_r)]*rate_in_iva
+    return np.convolve(np.array(I_r), IVA_arr)[0:len(I_r)] * rate_in_iva
 
 
 # Basic tests
 print('Running. Should maybe take 10-20 seconds')
 df = pd.read_csv(CSV_CASE_PATH, sep=' ', parse_dates=[
                  DATE_COLUMN]).set_index(DATE_COLUMN)
+df_in_iva = pd.read_csv(CSV_IN_IVA_PATH, sep=' ', parse_dates=[
+    DATE_COLUMN]).set_index(DATE_COLUMN)
+
 y0 = 0, N - i0, 0, 0, i0
 daterange = [START_DATE + datetime.timedelta(days=x) for x in range(
     0, int((END_DATE_SIMULATION - START_DATE).days))]
@@ -173,7 +181,7 @@ results = pool.starmap(run_optimization, [(
 for i, res in enumerate(results):
     delta, epsilon, theta = res.x
     #print(delta, epsilon, theta)
-    #print(res.fun)
+    # print(res.fun)
     if i == 0 or res.fun < best_res.fun:
         best_res = res
 
@@ -224,54 +232,62 @@ res = pool.starmap(
 # Calculate boostraping CI
 t_ode, R0, R_e = ([] for i in range(3))
 return_vals = odeint(SEIR_derivative, y0, t, args=(
-    t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0)) # Optimal
+    t_b, expit(delta), epsilon, np.exp(theta), gamma, p0, q0))  # Optimal
 R, S, E, I_o, I_r = return_vals.T
 R0_plot = R0
 Re_plot = R_e
 daterange_ode = [START_DATE + datetime.timedelta(days=x) for x in t_ode]
 
-I_r_daily_new = (1- p0) * E * rho # New reported incidences estimates
+I_r_daily_new = (1 - p0) * E * rho  # New reported incidences estimates
 
 
-I_r_bootsraping = [(1- p0) * res[ind][:,2:3] * rho for ind in range(len(res))]
-I_r_bootsraping = np.concatenate(I_r_bootsraping ,axis=1)
-S_bootstraping = [res[ind][:,1:2] for ind in range(len(res))]
-S_bootstraping = np.concatenate(S_bootstraping,axis=1)
+I_r_bootsraping = [(1 - p0) * res[ind][:, 2:3] *
+                   rho for ind in range(len(res))]
+I_r_bootsraping = np.concatenate(I_r_bootsraping, axis=1)
+S_bootstraping = [res[ind][:, 1:2] for ind in range(len(res))]
+S_bootstraping = np.concatenate(S_bootstraping, axis=1)
 
-I_r_Up = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, up=True)
-I_r_Down = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, up=False)
-S_Up = np.apply_along_axis(CRI, axis=1, arr=S_bootstraping, level = 0.95, up=True)
-S_Down = np.apply_along_axis(CRI, axis=1, arr=S_bootstraping, level = 0.95, up=False)
+I_r_Up = np.apply_along_axis(
+    CRI, axis=1, arr=I_r_bootsraping, level=0.95, up=True)
+I_r_Down = np.apply_along_axis(
+    CRI, axis=1, arr=I_r_bootsraping, level=0.95, up=False)
+S_Up = np.apply_along_axis(
+    CRI, axis=1, arr=S_bootstraping, level=0.95, up=True)
+S_Down = np.apply_along_axis(
+    CRI, axis=1, arr=S_bootstraping, level=0.95, up=False)
 
 # How many is in iva
 in_iva = calculate_in_iva(I_r_daily_new)
 
 # Plotting
-fig, axs = plt.subplots(2,2)
+fig, axs = plt.subplots(2, 2)
 
 axs[0, 0].plot(daterange, I_r_daily_new)
 axs[0, 0].plot(df[INCIDENSE_COLUMN][[da.date()
-                               for da in daterange_opt]], 'o', mfc='none')
+                                     for da in daterange_opt]], 'o', mfc='none')
 axs[0, 0].plot(daterange, in_iva)
+axs[0, 0].plot(df_in_iva[IVA_COLUMN][[da.date()
+                                     for da in daterange[(START_DATE_IVA - START_DATE).days:len(df_in_iva)]]], 'o', mfc='none')
 axs[0, 0].plot(daterange, I_r_Up, ',')
 axs[0, 0].plot(daterange, I_r_Down, ',')
 
 axs[0, 0].set_title('# new cases every day with CI')
-axs[0, 0].legend(['Estimated new cases', 'Observed new cases', 'Estimated in IVA'])
+axs[0, 0].legend(
+    ['Estimated new cases', 'Observed new cases', 'Estimated in IVA'])
 
 
-axs[1, 0].plot(daterange, (N-np.array(S))/N*100)
-axs[1, 0].plot(daterange, (N-np.array(S_Up))/N*100, ',')
-axs[1, 0].plot(daterange, (N-np.array(S_Down))/N*100, ',')
+axs[1, 0].plot(daterange, (N - np.array(S)) / N * 100)
+axs[1, 0].plot(daterange, (N - np.array(S_Up)) / N * 100, ',')
+axs[1, 0].plot(daterange, (N - np.array(S_Down)) / N * 100, ',')
 axs[1, 0].set_title('Percent Non-Susceptible this date with CI')
 axs[1, 0].set_ylabel('Percent')
 
-axs[0, 1].plot(daterange, (np.array(I_o)+np.array(I_r))/N*100)
+axs[0, 1].plot(daterange, (np.array(I_o) + np.array(I_r)) / N * 100)
 axs[0, 1].set_title('Percent infected this date')
 axs[0, 1].set_ylabel('Percent')
 
-axs[1,1].plot(daterange_ode, R0_plot)
-axs[1,1].plot(daterange_ode, Re_plot, 'o', mfc='none')
+axs[1, 1].plot(daterange_ode, R0_plot)
+axs[1, 1].plot(daterange_ode, Re_plot, 'o', mfc='none')
 axs[1, 1].set_title('R0 and R_e')
 axs[1, 1].legend(['R0', 'R_e'])
 
