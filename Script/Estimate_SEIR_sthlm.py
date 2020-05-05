@@ -18,6 +18,10 @@ INCIDENSE_COLUMN = 'Incidens'
 MEAN_LENGTH_SICK = 5
 MEAN_LENGTH_INCUBATION = 5.1
 
+MEAN_LENGTH_IVA = 10 #Guess from their analysis #https://www.folkhalsomyndigheten.se/contentassets/4b4dd8c7e15d48d2be744248794d1438/skattning-av-behov-av-slutenvardsplatser-covid-lombardiet.pdf
+IVA_DELAY = 11 # From iva register
+RATE_IN_IVA = 0.12 #Test to fit peak at approx 224
+
 # report page 9#int(648557/0.27+616655/0.26)/2 #Mean from Tabell 1 page 13
 # #approx 2.386M
 N = 2374550
@@ -26,7 +30,7 @@ START_DATE = datetime.datetime(2020, 2, 17)
 END_DATE_OPTIMIZE = datetime.datetime(2020, 4, 10)
 END_DATE_SIMULATION = datetime.datetime(2020, 8, 10)
 MIDDLE_THETA = datetime.datetime(2020, 3, 16)
-NB_OPTIMIZATIONS = 20  # Number of optimization runs
+NB_OPTIMIZATIONS = 4  # Number of optimization runs
 NB_BOOTSRAPING = 1000
 
 p0 = 0.987  # Calibrated somehow to fit 2.5% in end march
@@ -129,6 +133,12 @@ def CRI(x, level=0.95, up=False):
     if up:
         return x[np.int(n * U)] 
     return x[np.int(n * L)]
+
+def calculate_in_iva(I_r, rate_in_iva=RATE_IN_IVA, iva_delay=IVA_DELAY, mean_length_iva=MEAN_LENGTH_IVA):
+    IVA_arr = np.zeros(IVA_DELAY+MEAN_LENGTH_IVA)
+    IVA_arr[IVA_DELAY:] = 1
+    return np.convolve(np.array(I_r), IVA_arr)[0:len(I_r)]*rate_in_iva
+
 
 # Basic tests
 print('Running. Should maybe take 10-20 seconds')
@@ -233,17 +243,21 @@ I_r_Down = np.apply_along_axis(CRI, axis=1, arr=I_r_bootsraping, level = 0.95, u
 S_Up = np.apply_along_axis(CRI, axis=1, arr=S_bootstraping, level = 0.95, up=True)
 S_Down = np.apply_along_axis(CRI, axis=1, arr=S_bootstraping, level = 0.95, up=False)
 
+# How many is in iva
+in_iva = calculate_in_iva(I_r_daily_new)
+
 # Plotting
 fig, axs = plt.subplots(2,2)
 
 axs[0, 0].plot(daterange, I_r_daily_new)
 axs[0, 0].plot(df[INCIDENSE_COLUMN][[da.date()
                                for da in daterange_opt]], 'o', mfc='none')
+axs[0, 0].plot(daterange, in_iva)
 axs[0, 0].plot(daterange, I_r_Up, ',')
 axs[0, 0].plot(daterange, I_r_Down, ',')
 
 axs[0, 0].set_title('# new cases every day with CI')
-axs[0, 0].legend(['Estimated new cases', 'Observed new cases'])
+axs[0, 0].legend(['Estimated new cases', 'Observed new cases', 'Estimated in IVA'])
 
 
 axs[1, 0].plot(daterange, (N-np.array(S))/N*100)
