@@ -23,14 +23,15 @@ MEAN_LENGTH_INCUBATION = 5.1
 MEAN_LENGTH_IVA = 10  # Guess from their analysis #https://www.folkhalsomyndigheten.se/contentassets/4b4dd8c7e15d48d2be744248794d1438/skattning-av-behov-av-slutenvardsplatser-covid-lombardiet.pdf
 IVA_DELAY = 11  # From iva register
 RATE_IN_IVA = 0.121  # Test to fit curve
-
+IVA_OPT_WEGIHT = 0.1 #Does it make sense to fit to IVA since they can be iva cases from patience infected abroad?
 # report page 9#int(648557/0.27+616655/0.26)/2 #Mean from Tabell 1 page 13
 # #approx 2.386M
 N = 2374550
 i0 = 1
 START_DATE = datetime.datetime(2020, 2, 17)
 START_DATE_IVA = datetime.datetime(2020, 3, 30)
-END_DATE_OPTIMIZE = datetime.datetime(2020, 4, 10)
+END_DATE_OPTIMIZE = datetime.datetime(2020, 5, 4)
+END_DATE_INCIDENCE_OPTIMIZE = datetime.datetime(2020, 4, 10)
 END_DATE_SIMULATION = datetime.datetime(2020, 8, 10)
 MIDDLE_THETA = datetime.datetime(2020, 3, 16)
 NB_OPTIMIZATIONS = 4  # Number of optimization runs
@@ -89,7 +90,7 @@ def opt_guesses():
     return u_d, u_e, u_t
 
 
-def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
+def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, in_iva, iva_opt_weight):
     # Code for minimizing, similar as in R code
 
     delta = expit(params[0])
@@ -104,22 +105,22 @@ def RSS(params, t_optimize, t_b, y0, p0, rho, incidence, gamma, q0):
         t_b, delta, epsilon, theta, gamma, p0, q0))
     R, S, E, I_o, I_r = return_vals.T
     fitted_incidence = (1 - p0) * E * rho
-    # print(((incidence - fitted_incidence)**2).sum())
-
-    return ((incidence - fitted_incidence)**2).sum()
+    fitted_in_iva = calculate_in_iva(fitted_incidence[len(t_optimize)-len(daterange_iva):])
+    fitted_incidence = fitted_incidence[:len(incidence)]
+    return ((incidence - fitted_incidence)**2).sum() + iva_opt_weight*((in_iva - fitted_in_iva)**2).sum()
 
 
 def run_optimization(x0, args):
-    t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, tmpdict = args
+    t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, in_iva, iva_opt_weight, tmpdict = args
     return minimize(RSS, x0, method=tmpdict['method'], options=tmpdict['options'],
-                    args=(t_optimize, t_b, y0, p0, rho, incidence, gamma, q0))
+                    args=(t_optimize, t_b, y0, p0, rho, incidence, gamma, q0, in_iva, iva_opt_weight))
 
 
 def numerical_Hessian(params, args):
     # Calculate Hessian since they are using that for covariance matrix but it
     # is not returned from Nelder-Mead in python
-    t_optimize, t_b, y0, p0, rho, incidence,  gamma, q0 = args
-    return RSS(params, t_optimize, t_b, y0, p0, rho, incidence,  gamma, q0)
+    t_optimize, t_b, y0, p0, rho, incidence,  gamma, q0, in_iva, iva_opt_weight = args
+    return RSS(params, t_optimize, t_b, y0, p0, rho, incidence,  gamma, q0, in_iva, iva_opt_weight)
 
 
 def run_odeint(paras, args):
@@ -155,7 +156,10 @@ df_in_iva = pd.read_csv(CSV_IN_IVA_PATH, sep=' ', parse_dates=[
 y0 = 0, N - i0, 0, 0, i0
 daterange = [START_DATE + datetime.timedelta(days=x) for x in range(
     0, int((END_DATE_SIMULATION - START_DATE).days))]
+daterange_iva = [datetime.datetime(my_date.year, my_date.month, my_date.day) for my_date in df_in_iva.index.date]
+
 t = np.arange(len(daterange))
+t_iva = np.arange(len(daterange_iva))
 
 global t_ode, R0, R_e
 t_ode, R0, R_e = ([] for i in range(3))
@@ -169,19 +173,21 @@ R, S, E, I_o, I_r = return_vals.T
 t_optimize = np.arange((END_DATE_OPTIMIZE - START_DATE).days + 1)
 
 incidence = df.to_numpy().flatten()
-daterange_opt = [START_DATE + datetime.timedelta(days=x) for x in range(
-    0, int((END_DATE_OPTIMIZE - START_DATE).days + 1))]
+in_iva = df_in_iva.to_numpy().flatten()
+
+daterange_inc = [START_DATE + datetime.timedelta(days=x) for x in range(
+    0, int((END_DATE_INCIDENCE_OPTIMIZE - START_DATE).days + 1))]
 
 pool = mp.Pool(mp.cpu_count())
 args = [t_optimize, t_b, y0, p0, rho, incidence[
-    0:t_optimize.shape[0]],  gamma, q0]
+    0:t_optimize.shape[0]],  gamma, q0, in_iva, IVA_OPT_WEGIHT]
 opt_args = [{'method': 'Nelder-Mead', 'options': {'maxiter': 1000}}]
 results = pool.starmap(run_optimization, [(
     opt_guesses(), args + opt_args) for i in range(NB_OPTIMIZATIONS)])
 for i, res in enumerate(results):
     delta, epsilon, theta = res.x
     #print(delta, epsilon, theta)
-    # print(res.fun)
+    #print(res.fun)
     if i == 0 or res.fun < best_res.fun:
         best_res = res
 
@@ -257,23 +263,23 @@ S_Down = np.apply_along_axis(
     CRI, axis=1, arr=S_bootstraping, level=0.95, up=False)
 
 # How many is in iva
-in_iva = calculate_in_iva(I_r_daily_new)
+in_iva_est = calculate_in_iva(I_r_daily_new)
 
 # Plotting
 fig, axs = plt.subplots(2, 2)
 
 axs[0, 0].plot(daterange, I_r_daily_new)
 axs[0, 0].plot(df[INCIDENSE_COLUMN][[da.date()
-                                     for da in daterange_opt]], 'o', mfc='none')
-axs[0, 0].plot(daterange, in_iva)
+                                     for da in daterange_inc]], 'o', mfc='none')
+axs[0, 0].plot(daterange, in_iva_est)
 axs[0, 0].plot(df_in_iva[IVA_COLUMN][[da.date()
-                                     for da in daterange[(START_DATE_IVA - START_DATE).days:len(df_in_iva)]]], 'o', mfc='none')
+                                     for da in daterange_iva]], 'o', mfc='none')
 axs[0, 0].plot(daterange, I_r_Up, ',')
 axs[0, 0].plot(daterange, I_r_Down, ',')
 
 axs[0, 0].set_title('# new cases every day with CI')
 axs[0, 0].legend(
-    ['Estimated new cases', 'Observed new cases', 'Estimated in IVA'])
+    ['Estimated new cases', 'Observed new cases', 'Estimated in IVA', 'True IVA'])
 
 
 axs[1, 0].plot(daterange, (N - np.array(S)) / N * 100)
