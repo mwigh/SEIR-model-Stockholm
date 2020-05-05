@@ -30,7 +30,7 @@ NB_OPTIMIZATIONS = 20  # Number of optimization runs
 NB_BOOTSRAPING = 1000
 
 p0 = 0.987  # Calibrated somehow to fit 2.5% in end march
-q0 = 0.55 # Rate of how infective a non reported case is vs reported
+q0 = 0.11 # Rate of how infective a non reported case is vs reported
 delta = 0.16 # Init for test
 epsilon = -0.19 # Init for test
 theta = 10.9 # Init for test
@@ -131,6 +131,7 @@ def CRI(x, level=0.95, up=False):
     return x[np.int(n * L)]
 
 # Basic tests
+print('Running. Should maybe take 10-20 seconds')
 df = pd.read_csv(CSV_CASE_PATH, sep=' ', parse_dates=[
                  DATE_COLUMN]).set_index(DATE_COLUMN)
 y0 = 0, N - i0, 0, 0, i0
