@@ -12,5 +12,7 @@ virtualenv -p /usr/bin/python3.7 venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
 To run:
 ```python Script/Estimate_SEIR_sthlm.py```
+
